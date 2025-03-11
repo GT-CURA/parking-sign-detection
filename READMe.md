@@ -1,15 +1,35 @@
-# Parking Sign Detection using GSV Images and CV Models
+# **Parking Sign Detection using GSV Images and Computer Vision Models**
 
-This project proposes an automatic parking sign detection method using Google Street View (GSV) images and computer vision (CV) models. Many cities in the US do not maintain street parking location information in part due to the high cost of manual recording and updating inventories. To help address this issue, we leverage existing assets of parking sign inventories to facilitate parking sign detections in other cities. Our demonstration includes using New York City's parking sign images to train an object detection model and applying the model on Atlanta, Georgia, parking sign images. Throughout our workflow, we use GSV images for both model training and inference to ensure that our method can be generalizable to different cities in the US.
+This project presents an **automatic parking sign detection method** using **Google Street View (GSV) images** and **computer vision (CV) models**.
 
-This project is part of a broader research project developing "Complete Street" Index at [the Center for Urban Resilience and Analytics](https://resilience.research.gatech.edu/) at Georgia Tech. 
+## **Motivation**
+Many cities in the US do not maintain updated street parking location data due to the high cost of manual recording and inventory updates. To address this, we leverage existing parking sign inventories to assist in parking sign detection across different cities.
 
-Methods in this repository include:
-1. GSV image retrieval using the parking sign location data available at [NYC Open Data Portal](https://data.cityofnewyork.us/Transportation/Parking-Regulation-Locations-and-Signs/xswq-wnv9/about_data)
+## **Project Overview**
+Our demonstration involves:
+- Using **New York City’s parking sign images** to train an **object detection model**.
+- Applying the trained model on **Atlanta, Georgia’s** parking sign images.
+- Ensuring **generalizability** by using **GSV images** for both training and inference.
 
-2. YOLO (v. 11) object detection model training
+This project is part of the broader **"Complete Street" Index** research initiative at [the Center for Urban Resilience and Analytics](https://resilience.research.gatech.edu/) at **Georgia Tech**.
 
-3. Inference on Atlanta GSV images
+---
 
-4. Visualization 
-![Geographical distribution of detected parking signs by type on Atlanta test set (n=167)](./figure_readme.png)
+## **Methods**
+This repository includes the following key methods:
+
+1. **GSV Image Retrieval**  
+   - Extracting GSV images using **parking sign location data** from the [NYC Open Data Portal](https://data.cityofnewyork.us/Transportation/Parking-Regulation-Locations-and-Signs/xswq-wnv9/about_data).
+
+2. **Object Detection Model Training**  
+   - Training a **YOLO (v11)** object detection model on NYC parking sign images.
+
+3. **Inference on Atlanta GSV Images**  
+   - Applying the trained model to detect parking signs in Atlanta.
+   ![](/.30_model_trained/model_nc_5_0209_l_30_nycatl/val_batch0_pred.jpg)
+
+4. **Visualization**   
+   - Geographical distribution of detected parking signs in Atlanta (n=167).  
+
+   ![Detected Parking Signs](./figure_readme.png)
+---
