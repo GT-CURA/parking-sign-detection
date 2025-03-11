@@ -1,0 +1,412 @@
+---
+title: "Sampling & Downloading GSV Images"
+author: "Originally written by Bon Woo Koo & Subhro Guhathakurta; modified by Uijeong Hwang"
+date: '2024-10-28'
+output:
+  rmdformats::downcute:
+    downcute_theme: "chaos"
+---
+
+<style type="text/css">
+  body{
+  font-family: Arial;
+  }
+</style>
+
+# Intro
+
+The first thing we need to do to use GSV images for urban analytics is to sample points, prepare location data (i.e., coordinates and headings) and download the images. The literature uses various methods to sample points to download GSV images from. For example, some studies sampled four images per street segments while some others downloaded four images (i.e., panorama) every 20 meters. We will be downloading four images per street segment, but you will also learn how to do it in a different way at the end.
+
+**NOTE:** The method for sampling GSV images in this document is a simplified version.
+
+![](https://raw.githubusercontent.com/ujhwang/urban-analytics-2024/main/Lab/module_4/img/GSV_sampling.JPG)
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(osmdata)
+library(sfnetworks)
+library(units)
+library(sf)
+library(tidygraph)
+library(tmap)
+library(here)
+library(progress)
+library(nominatimlite)
+library(lwgeom)
+library(furrr)
+library(glue)
+ttm()
+```
+
+# Select a study area.
+```{r, message=FALSE, warning=FALSE, results='hide'}
+atl_bboxes <- st_read("./seg/cluster_bbox_lengthall.geojson") %>%
+  st_transform(4326)
+atl_bboxes
+```
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+atl_roadsegs <- st_read("./seg/top_10_road_segments_v2.0.geojson") %>%
+  st_transform(4326)
+atl_roadsegs
+```
+
+
+```{r}
+atl_roadsegs %>%
+  distinct(highway)
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(atl_bboxes) + 
+  tm_polygons(col = 'grey', alpha = 0.5, lwd = 1.5) +
+tm_shape(atl_roadsegs) + 
+  tm_lines(col = 'blue', alpha = 0.5, lwd = 1.5) 
+```
+
+# Get each cluster and OSM edges within i_th bbox
+## Download OSM.
+```{r}
+i <- 1
+temp <- atl_bboxes %>%
+  slice(i) 
+temp
+
+temp_bbox <- temp %>%
+  st_bbox()
+temp_bbox
+```
+
+```{r}
+temp_roadseg <- atl_roadsegs %>%
+  mutate(cluster_id = str_split_i(link_id, pattern="_", 1)) %>%
+  filter(str_sub(cluster_id, 8) == as.character(i))
+temp_roadseg
+```
+
+```{r}
+# Get OSM data.
+temp_osm_road <- opq(bbox = temp_bbox) %>%
+  add_osm_feature(key = "highway", 
+                  value = c("trunk", "primary", 
+                            "secondary", "tertiary",
+                            "oneway")) %>%
+  osmdata_sf() %>% 
+  osm_poly2line()
+temp_osm_road
+```
+
+```{r}
+temp_net <- temp_osm_road$osm_lines %>% 
+  select(osm_id, highway, oneway) %>% 
+  sfnetworks::as_sfnetwork(directed = FALSE) %>% 
+  activate("edges") %>%
+  filter(!edge_is_multiple()) %>% # remove duplicated edges
+  filter(!edge_is_loop()) %>% # remove loops
+  convert(., sfnetworks::to_spatial_subdivision) %>% # subdivide edges
+  convert(., sfnetworks::to_spatial_smooth) # delete pseudo nodes
+```
+
+## Filter relevant network
+```{r}
+temp_net <- temp_net %>% 
+  # Activate 'edges'
+  activate("edges") %>% 
+  # Add length column
+  mutate(length = st_length(.) %>% unclass()) %>% 
+  # Drop segments that are too short (100m)
+  filter(length > 10) 
+temp_net
+```
+
+## Extract edges.
+- Always extract edges first, so that the nodes you select afterhand are only the ones that are relevant to the selected edges.
+```{r}
+temp_edges <- temp_net %>% 
+  # Extract 'edges'
+  st_as_sf("edges") %>% 
+  # Drop redundant columns 
+  select(osm_id, highway, oneway) %>%
+  mutate(oneway = replace_na(oneway, "no"))
+print(nrow(temp_edges))
+temp_edges <- temp_edges[temp, ]
+print(nrow(temp_edges))
+temp_edges
+```
+
+## Overlay
+```{r}
+temp_roadseg
+```
+
+```{r}
+temp_edges  
+```
+
+
+```{r}
+tmap_mode("view")
+tm_shape(temp) + 
+  tm_polygons(col = 'grey', alpha = 0.5, lwd = 1.5) +
+tm_shape(temp_roadseg) + 
+  tm_lines(col = 'blue', alpha = 0.1, lwd = 10) +
+tm_shape(temp_edges) + 
+  tm_lines(col = 'red', alpha = 0.5, lwd = 1.5) 
+```
+
+## measure the overlap
+```{r}
+temp_edges_buffer <- temp_edges %>%
+  st_buffer(5)
+
+temp_roadseg_buffer <- temp_roadseg %>%
+  st_buffer(5)
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(temp_roadseg_buffer[1,]) + 
+  tm_polygons(col = 'blue', alpha = 0.5) +
+tm_shape(temp_edges_buffer) + 
+  tm_polygons(col = 'red', alpha = 0.5) 
+```
+
+```{r}
+temp_overlap <- st_intersection(temp_edges_buffer, temp_roadseg_buffer[1,]) 
+temp_overlap
+```
+
+```{r}
+temp_overlap <- temp_overlap %>%
+  mutate(geometry = st_make_valid(geometry)) %>%
+  #filter(st_is_valid(geometry)) %>%
+  mutate(overlap_area = as.numeric(st_area(geometry))) %>%
+  arrange(desc(overlap_area)) %>%
+  first()
+temp_overlap
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(temp_roadseg_buffer[1,]) + 
+  tm_polygons(col = 'blue', alpha = 0.5) +
+tm_shape(temp_edges_buffer) + 
+  tm_polygons(col = 'yellow', alpha = 0.3) +
+tm_shape(temp_overlap) + 
+  tm_polygons(col = 'red', alpha = 0.7) 
+```
+
+```{r}
+result <- temp_overlap %>%
+  select(oneway, link_id, overlap_area) %>%
+  st_drop_geometry()
+result
+```
+
+```{r}
+temp_roadseg[1,] %>%
+  left_join(result, by="link_id")
+```
+
+## Functionalize
+```{r}
+temp_overlap_stack <- list()
+
+for (j in 1:nrow(temp_roadseg_buffer)){
+  temp_overlap <- suppressWarnings(st_intersection(temp_edges_buffer, temp_roadseg_buffer[j,])) %>%
+    mutate(geometry = st_make_valid(geometry)) %>%
+    #filter(st_is_valid(geometry)) %>%
+    mutate(overlap_area = as.numeric(st_area(geometry))) %>%
+    arrange(desc(overlap_area)) %>%
+    first() %>%
+    select(oneway, link_id, overlap_area) %>%
+    st_drop_geometry()
+  temp_overlap_stack[[j]] <- temp_overlap
+}
+
+temp_overlap_stack <- bind_rows(temp_overlap_stack, .id = "source") 
+```
+
+## Parallelize
+```{r}
+# Set up parallel backend
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# Apply function in parallel using furrr
+temp_overlap_stack <- future_map_dfr(1:nrow(temp_roadseg_buffer), function(j) {
+  suppressWarnings(st_intersection(temp_edges_buffer, temp_roadseg_buffer[j,])) %>%
+    mutate(geometry = st_make_valid(geometry)) %>%
+    mutate(overlap_area = as.numeric(st_area(geometry))) %>%
+    arrange(desc(overlap_area)) %>%
+    first() %>%
+    select(oneway, link_id, overlap_area) %>%
+    st_drop_geometry()
+}, .id = "source")
+
+# Reset to sequential processing
+plan(sequential)
+```
+
+# For loop
+jumping 10, 11
+```{r}
+entire_overlap_stack <- list()
+
+#for (i in 1:nrow(atl_bboxes)) {
+for (i in 6:9) {
+
+  ## Download OSM.
+  temp <- atl_bboxes %>%
+    slice(i) 
+  
+  temp_bbox <- temp %>%
+    st_bbox()
+  
+  temp_roadseg <- atl_roadsegs %>%
+    mutate(cluster_id = str_split_i(link_id, pattern="_", 1)) %>%
+    filter(str_sub(cluster_id, 8) == as.character(i))
+  
+  # Get OSM data.
+  temp_osm_road <- opq(bbox = temp_bbox, 
+                       timeout = 200) %>%
+    add_osm_feature(key = "highway", 
+                    value = c("trunk", "primary", 
+                              "secondary", "tertiary",
+                              "oneway")) %>%
+    osmdata_sf() %>% 
+    osm_poly2line()
+  
+  # Extract net
+  temp_net <- temp_osm_road$osm_lines %>% 
+    select(osm_id, highway, oneway) %>% 
+    sfnetworks::as_sfnetwork(directed = FALSE) %>% 
+    activate("edges") %>%
+    filter(!edge_is_multiple()) %>% # remove duplicated edges
+    filter(!edge_is_loop()) %>% # remove loops
+    convert(., sfnetworks::to_spatial_subdivision) %>% # subdivide edges
+    convert(., sfnetworks::to_spatial_smooth) %>% # delete pseudo nodes
+    activate("edges") %>% 
+    mutate(length = st_length(.) %>% unclass()) %>% 
+    # Drop segments that are too short (100m)
+    filter(length > 10) 
+  
+  # Extract edges
+  temp_edges <- temp_net %>% 
+    # Extract 'edges'
+    st_as_sf("edges") %>% 
+    # Drop redundant columns 
+    select(osm_id, highway, oneway) %>%
+    mutate(oneway = replace_na(oneway, "no"))
+  print(nrow(temp_edges))
+  temp_edges <- temp_edges[temp, ]
+  print(nrow(temp_edges))
+  
+  # Overlay
+  temp_edges_buffer <- temp_edges %>%
+    st_buffer(5)
+  temp_roadseg_buffer <- temp_roadseg %>%
+    st_buffer(5)
+  
+  ### Parallel computing ###
+  # Set up parallel backend
+  plan(multisession, workers = parallel::detectCores() - 1)
+  
+  # Apply function in parallel using furrr
+  temp_overlap_stack <- future_map_dfr(1:nrow(temp_roadseg_buffer), function(j) {
+    suppressWarnings(st_intersection(temp_edges_buffer, temp_roadseg_buffer[j,])) %>%
+      mutate(geometry = st_make_valid(geometry)) %>%
+      mutate(overlap_area = as.numeric(st_area(geometry))) %>%
+      arrange(desc(overlap_area)) %>%
+      first() %>%
+      select(oneway, link_id, overlap_area) %>%
+      st_drop_geometry()
+  }, .id = "source")
+  
+  # Reset to sequential processing
+  plan(sequential)
+  ### End ###
+  
+  entire_overlap_stack[[i]] <- temp_overlap_stack
+  
+  print(glue("Finished {i}th"))
+  
+  Sys.sleep(5)
+}
+```
+
+```{r}
+entire_overlap_stack <- bind_rows(entire_overlap_stack, .id = "source") 
+```
+
+```{r}
+entire_overlap_stack
+```
+
+```{r}
+entire_overlap_stack %>%
+  st_write("./seg/atl_metro_osm_clus_03_05.geojson")
+```
+
+
+\
+\
+
+# Integrate
+```{r}
+atl_metro_osm_clus_a <- st_read("./seg/atl_metro_osm_clus_01_04.geojson")
+atl_metro_osm_clus_b <- st_read("./seg/atl_metro_osm_clus_05_09.geojson")
+atl_metro_osm_clus_c <- st_read("./seg/atl_metro_osm_clus_12_20.geojson")
+atl_metro_osm_clus_d <- st_read("./seg/atl_metro_osm_clus_21_23.geojson")
+atl_metro_osm_clus_e <- st_read("./seg/atl_metro_osm_clus_24.geojson")
+```
+
+```{r}
+atl_metro_osm_entire <- atl_metro_osm_clus_a %>%
+  bind_rows(atl_metro_osm_clus_b) %>%
+  bind_rows(atl_metro_osm_clus_c) %>%
+  bind_rows(atl_metro_osm_clus_d) %>%
+  bind_rows(atl_metro_osm_clus_e) %>%
+  st_drop_geometry() %>%
+  select(link_id, oneway)
+atl_metro_osm_entire
+```
+
+# Join
+```{r}
+atl_roadsegs <- atl_roadsegs %>%
+  left_join(atl_metro_osm_entire, by="link_id") %>%
+  mutate(oneway = replace_na(oneway, "no"))
+atl_roadsegs
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(atl_roadsegs) + 
+  tm_lines(col = 'blue', alpha = 0.5) 
+```
+
+
+# Export
+```{r}
+atl_roadsegs %>%
+  st_write("./seg/atl_roadsegs.geojson")
+```
+
+```{r}
+atl_roadsegs %>%
+  distinct(highway)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

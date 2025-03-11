@@ -1,0 +1,9 @@
+secrets.yaml
+00_nyc_mutcd/Parking_Regulation_Shapefile/*
+*.jpg
+*.png
+*.geojson
+*.csv
+*.zip
+*.pt
+11_data_infer/img_atl_0226/

@@ -1,0 +1,944 @@
+---
+title: "nyc_park_regulation"
+output: html_document
+date: "2024-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set up
+```{r message=FALSE, warning=FALSE}
+# Package names
+packages <- c("tidyverse", "sf", "tmap", "tsibble", "tidycensus", "osmdata", "sfnetworks", "units", "tidygraph", "here")
+
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+install.packages(packages[!installed_packages])
+}
+
+# Load packages
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+# Import
+```{r}
+data_nyc_sf <- st_read("Parking_Regulation_Shapefile/Parking_Regulation_Shapefile.shp")
+data_nyc_sf
+```
+
+```{r}
+data_nyc_sf_not_mutcd <-data_nyc_sf %>%
+   filter(!str_split_i(SG_MUTCD_C, pattern = "-", 1) %in% c("R7", "R8")) %>%
+   select(SG_SEQNO_N, SG_MUTCD_C, X, Y, SIGNDESC1, SIGNDESC, SG_KEY_BOR) %>%
+   relocate(SG_MUTCD_C, X, Y, SIGNDESC1, SIGNDESC, SG_SEQNO_N)
+data_nyc_sf_not_mutcd
+```
+
+\
+\
+
+# Common signs
+Sorting common parking signs pertaining to the MUTCD regulation 
+```{r}
+pattern <- "\\([^()]*\\)|<[^<>]*>"
+```
+
+```{r}
+common_parksigns_before_sampling <- data_nyc_sf_not_mutcd %>%
+  st_drop_geometry() %>%
+  mutate(SG_MUTCD_C_1 = str_split_i(SG_MUTCD_C, pattern = "-", 1),
+         SG_MUTCD_C_2 = str_split_i(SG_MUTCD_C, pattern = "-", 2)) %>%
+  mutate(SG_MUTCD_C_2_abb = str_remove_all(SG_MUTCD_C_2, "[A-Za-z]")) %>%     # this part has been changed
+  mutate(SG_MUTCD_C_abb = str_c(SG_MUTCD_C_1, "-", SG_MUTCD_C_2_abb)) %>%
+  select(-c("SG_MUTCD_C_1", "SG_MUTCD_C_2", "SG_MUTCD_C_2_abb")) %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C) %>%
+  arrange(SG_MUTCD_C_abb) %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  arrange(SG_MUTCD_C) %>%
+  mutate(SIGNDESC1_abb = first(SIGNDESC1)) %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, SIGNDESC1_abb, SIGNDESC1) %>%
+  mutate(SIGNDESC1_abb = gsub(pattern, "", SIGNDESC1_abb)) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C_abb, SG_MUTCD_C) %>%
+  summarise(SIGNDESC1_abb = first(SIGNDESC1_abb),
+            SIGNDESC1 = first(SIGNDESC1), 
+            count = n()) %>%
+  ungroup() %>%
+  select(-SIGNDESC1) %>%
+  select(-count)
+common_parksigns_before_sampling
+```
+
+```{r}
+common_parksigns_before_sampling %>%
+  write_csv("assets/common_parksigns/common_parksigns_before_sampling_not_mutcd.csv")
+```
+
+```{r}
+common_parksigns_before_sampling %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+```
+
+\
+\
+
+# Sampling
+## exclude Manhattan
+```{r}
+data_nyc_sf_not_mutcd <- data_nyc_sf_not_mutcd %>%
+  filter(SG_KEY_BOR != "M")
+data_nyc_sf_not_mutcd
+```
+
+## count instances per category
+```{r}
+data_nyc_sf_not_mutcd <- data_nyc_sf_not_mutcd %>%
+  left_join(common_parksigns_before_sampling, by = "SG_MUTCD_C") %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  mutate(count_abb = n()) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb) %>%
+  arrange(SG_MUTCD_C_abb, SG_MUTCD_C)
+data_nyc_sf_not_mutcd
+```
+
+```{r}
+data_nyc_sf_not_mutcd %>%
+  st_write("assets/parksign_coords/data_nyc_sf_not_mutcd.geojson")
+```
+
+```{r}
+data_nyc_sf_not_mutcd <- st_read("assets/parksign_coords/data_nyc_sf_not_mutcd.geojson")
+```
+
+## histogram
+```{r}
+data_nyc_sf_not_mutcd_counts <- data_nyc_sf_not_mutcd %>%
+  distinct(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count)
+data_nyc_sf_not_mutcd_counts
+```
+
+```{r}
+data_nyc_sf_not_mutcd_counts %>%
+  distinct(SG_MUTCD_C_abb, count_abb) %>%
+  arrange(desc(count_abb))
+```
+
+```{r fig.width = 10, fig.height = 4}
+g1 <- data_nyc_sf_not_mutcd_counts %>%
+  ggplot(aes(x = count_abb)) +
+  geom_histogram()
+g2 <- data_nyc_sf_not_mutcd_counts %>%
+  filter(count_abb < 100) %>%
+  ggplot(aes(x = count_abb)) +
+  geom_histogram()
+ggpubr::ggarrange(g1, g2, ncol = 2)
+```
+
+```{r fig.width = 10, fig.height = 4}
+g1 <- data_nyc_sf_not_mutcd_counts %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+g2 <- data_nyc_sf_not_mutcd_counts %>%
+  filter(count < 100) %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+ggpubr::ggarrange(g1, g2, ncol = 2)
+```
+
+## sorting out rare signs
+```{r}
+data_nyc_sf_not_mutcd_counts %>%
+  arrange(count) %>%
+  filter(count < 50)
+```
+
+```{r}
+data_nyc_sf_not_mutcd_counts %>%
+  arrange(count) %>%
+  filter(count > 9) %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  summarise(count_abb = first(count_abb)) %>%
+  arrange(count_abb)
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout <- data_nyc_sf_not_mutcd %>%
+  filter(count > 49) %>%
+  select(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb, X, Y, SG_KEY_BOR)
+data_nyc_sf_not_mutcd_sortedout
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout <- data_nyc_sf_not_mutcd_sortedout %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  mutate(count_abb = n()) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb) %>%
+  arrange(SG_MUTCD_C_abb, SG_MUTCD_C)
+data_nyc_sf_not_mutcd_sortedout
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_counts <- data_nyc_sf_not_mutcd_sortedout %>%
+  distinct(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count)
+data_nyc_sf_not_mutcd_sortedout_counts
+```
+
+```{r fig.width = 10, fig.height = 4}
+g1 <- data_nyc_sf_not_mutcd_sortedout_counts %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+g2 <- data_nyc_sf_not_mutcd_sortedout_counts %>%
+  filter(count < 100) %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+ggpubr::ggarrange(g1, g2, ncol = 2)
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout <- data_nyc_sf_not_mutcd_sortedout %>%
+  mutate(sign_unique_id = 1:nrow(.)) %>%
+  mutate(sign_unique_id = as.character(sign_unique_id)) %>%
+  relocate(sign_unique_id)
+data_nyc_sf_not_mutcd_sortedout
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout %>%
+  st_write("assets/parksign_coords/data_nyc_sf_not_mutcd_sortedout.geojson")
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(data_nyc_sf_not_mutcd_sortedout) +
+  tm_dots()
+```
+
+## two sampling frames (all or random sample of size 200)
+```{r}
+data_nyc_sf_not_mutcd_sortedout_counts_below500 <- data_nyc_sf_not_mutcd_sortedout_counts %>%
+  ungroup() %>%
+  arrange(count_abb) %>%
+  filter(count_abb < 501) %>%
+  pull(SG_MUTCD_C_abb)
+data_nyc_sf_not_mutcd_sortedout_counts_below500
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_counts_moreequal100 <- data_nyc_sf_not_mutcd_sortedout_counts %>%
+  ungroup() %>%
+  arrange(count_abb) %>%
+  filter(count_abb > 500) %>%
+  pull(SG_MUTCD_C_abb)
+data_nyc_sf_not_mutcd_sortedout_counts_moreequal100
+```
+
+```{r}
+#data_sample_1 <- data_nyc_sf_not_mutcd_sortedout %>%
+#  filter(SG_MUTCD_C %in% data_nyc_sf_not_mutcd_sortedout_counts_below100) %>%
+#  group_by(SG_MUTCD_C) %>%
+#  arrange(count)
+#data_sample_1
+```
+
+```{r}
+set.seed(123)
+data_sample_2 <- data_nyc_sf_not_mutcd_sortedout %>%
+  filter(SG_MUTCD_C_abb %in% data_nyc_sf_not_mutcd_sortedout_counts_moreequal100) %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  slice_sample(n = 100) 
+data_sample_2 
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled <- data_sample_2
+data_nyc_sf_not_mutcd_sortedout_sampled
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  mutate(count_abb = n()) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb) %>%
+  arrange(SG_MUTCD_C_abb, SG_MUTCD_C)
+data_nyc_sf_not_mutcd_sortedout_sampled
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled_counts <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  distinct(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count)
+data_nyc_sf_not_mutcd_sortedout_sampled_counts
+```
+
+```{r fig.width = 10, fig.height = 4}
+g1 <- data_nyc_sf_not_mutcd_sortedout_sampled_counts %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+g2 <- data_nyc_sf_not_mutcd_sortedout_sampled_counts %>%
+  filter(count < 100) %>%
+  ggplot(aes(x = count)) +
+  geom_histogram()
+ggpubr::ggarrange(g1, g2, ncol = 2)
+```
+
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  st_write("assets/parksign_coords/data_nyc_sf_not_mutcd_sortedout_sampled.geojson")
+```
+
+## result
+```{r}
+tmap_mode("view")
+tm_shape(data_nyc_sf_not_mutcd_sortedout_sampled) +
+  tm_dots()
+```
+
+# HERE !!!
+# OSM road network
+```{r}
+#nyc_sf <- tigris::places('NY', progress_bar = F) %>%
+#  filter(NAME == "New York") %>%
+#  st_transform(4326)
+#nyc_sf
+```
+
+```{r}
+#nyc_sf %>%
+#  st_write("assets/nyc_sf.geojson")
+```
+
+```{r eval=FALSE}
+#nyc_sf_bbox <- nyc_sf %>%
+#  st_bbox()
+#nyc_sf_bbox
+```
+
+```{r eval=FALSE}
+#nyc_osm <- opq(bbox = nyc_sf_bbox) %>%
+#  add_osm_feature(key = 'highway', 
+#                  value = c("motorway", "trunk", "primary", 
+#                            "secondary", "tertiary", "unclassified",
+#                            "residential")) %>%
+#  osmdata_sf() %>% 
+#  osm_poly2line()
+#nyc_osm
+```
+
+```{r}
+#nyc_osm %>%
+#  saveRDS("assets/osm/nyc_osm.rds")
+```
+
+```{r}
+#nyc_osm <- readRDS("assets/osm/nyc_osm.rds")
+#nyc_osm
+```
+
+```{r eval=FALSE}
+#nyc_osm_lines <- nyc_osm$osm_lines %>% 
+#  select(osm_id, highway) %>% 
+#  sfnetworks::as_sfnetwork(directed = FALSE) %>% 
+#  activate("edges") %>%
+#  filter(!edge_is_multiple()) %>% # remove duplicated edges
+#  filter(!edge_is_loop()) %>% # remove loops
+#  convert(., sfnetworks::to_spatial_subdivision) %>% # subdivide edges
+#  convert(., sfnetworks::to_spatial_smooth) %>% # delete pseudo nodes
+#  mutate(length = edge_length()) %>%
+#  select(osm_id, highway, length) 
+#nyc_osm_lines
+```
+
+```{r}
+#nyc_osm_lines %>%
+#  saveRDS("assets/osm/nyc_osm_lines.rds")
+```
+
+```{r}
+#nyc_osm_lines <- readRDS("assets/osm/nyc_osm_lines.rds")
+#nyc_osm_lines
+```
+
+```{r}
+#nyc_osm_lines_only <- nyc_osm_lines %>%
+#  activate("edges") %>%
+#  as_tibble() %>%
+#  st_as_sf()
+#nyc_osm_lines_only
+```
+
+```{r}
+#nyc_osm_lines_only %>%
+#  st_write("assets/osm/nyc_osm_lines_only.geojson")
+```
+
+```{r}
+#nyc_osm_lines_only <- st_read("assets/osm/nyc_osm_lines_only.geojson")
+#nyc_osm_lines_only
+```
+
+```{r}
+#nyc_osm_lines_only_filtered <- nyc_osm_lines_only %>% 
+#  st_as_sf("edges") %>% 
+#  mutate(length = as.vector(length)) %>% 
+#  filter(length > 20) %>% 
+  #mutate(edge_id = seq(1,nrow(.))) %>%
+#  select(-c("from", "to")) 
+#nyc_osm_lines_only_filtered
+```
+
+```{r}
+#data_nyc_sf_not_mutcd_sortedout_sampled_buffer <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+#  st_buffer(dist = 12)
+#data_nyc_sf_not_mutcd_sortedout_sampled_buffer
+```
+
+```{r}
+#data_nyc_sf_not_mutcd_sortedout_sampled_buffer %>%
+#  st_write("assets/parksign_coords/data_nyc_sf_not_mutcd_sortedout_sampled_buffer.geojson")
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled_buffer <- st_read("assets/parksign_coords/data_nyc_sf_not_mutcd_sortedout_sampled_buffer.geojson")
+```
+
+```{r}
+#nyc_osm_lines_only_filtered <- nyc_osm_lines_only_filtered[data_nyc_sf_not_mutcd_sortedout_sampled_buffer, ] 
+#nyc_osm_lines_only_filtered
+```
+
+```{r}
+#nyc_osm_lines_only_filtered %>%
+#  st_write("assets/osm/nyc_osm_lines_only_filtered.geojson")
+```
+
+```{r}
+nyc_osm_lines_only_filtered <- st_read("assets/osm/nyc_osm_lines_only_filtered.geojson")
+```
+
+```{r}
+tmap_mode('view')
+
+tm_shape(nyc_sf) + 
+  tm_borders() +
+tm_shape(nyc_osm_lines_only_filtered) +
+  tm_lines() +
+tm_shape(data_nyc_sf_not_mutcd_sortedout_sampled_buffer) +
+  tm_polygons(col = "orange", alpha = 0.2) +
+tm_shape(data_nyc_sf_not_mutcd_sortedout_sampled) +
+  tm_dots(size = 0.05, col = "red")
+```
+
+# GSV images
+## sample case
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled
+```
+
+```{r}
+sample_sign <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  filter(sign_unique_id == "1791") %>%
+  select(sign_unique_id, SG_MUTCD_C_abb, SG_MUTCD_C, SIGNDESC1_abb)
+sample_sign
+```
+
+```{r}
+sample_buffer <- sample_sign %>%
+  st_buffer(dist = 12) %>%
+  st_boundary()
+sample_buffer
+```
+
+```{r}
+sample_osm <- nyc_osm_lines_only_filtered[sample_buffer, ]
+sample_osm
+```
+
+```{r}
+sample_intersections <- st_intersection(sample_buffer, sample_osm) %>%
+  st_cast("POINT") %>%
+  relocate(osm_id, highway, sign_unique_id, SG_MUTCD_C_abb, SG_MUTCD_C, SIGNDESC1_abb)
+sample_intersections
+```
+
+```{r}
+sample_intersections_1 <- sample_intersections[1,]
+sample_intersections_2 <- sample_intersections[2,]
+print(sample_intersections_1)
+print(sample_intersections_2)
+```
+
+```{r}
+tmap_mode('view')
+
+tm_shape(sample_osm) +
+  tm_lines() +
+tm_shape(sample_buffer) +
+  tm_lines(col = "black", alpha = 1) +
+tm_shape(sample_sign) +
+  tm_dots(size = 0.05, col = "red") +
+tm_shape(sample_intersections_1) +
+  tm_dots(size = 0.05, col = "blue") +
+tm_shape(sample_intersections_2) +
+  tm_dots(size = 0.05, col = "green")
+```
+
+
+```{r}
+# Extract coordinates
+coords1 <- st_coordinates(sample_intersections_1)
+coords2 <- st_coordinates(sample_intersections_2)
+
+# Ratio for internal division (m:n)
+m <- 1
+n <- 2
+
+# Calculate the internal division point. lon lat 
+x_div <- (m * coords2[1, "X"] + n * coords1[1, "X"]) / (m + n)
+y_div <- (m * coords2[1, "Y"] + n * coords1[1, "Y"]) / (m + n)
+
+# Create the division point as an sf object
+division_point <- st_point(c(x_div, y_div))
+division_point_sf <- st_sfc(division_point, crs = 4326)
+
+sample_division_1 <- sample_intersections_1 
+st_geometry(sample_division_1) <- st_sfc(division_point_sf)
+
+# Ratio for internal division (m:n)
+m <- 2
+n <- 1
+
+# Calculate the internal division point. lon lat 
+x_div <- (m * coords2[1, "X"] + n * coords1[1, "X"]) / (m + n)
+y_div <- (m * coords2[1, "Y"] + n * coords1[1, "Y"]) / (m + n)
+
+# Create the division point as an sf object
+division_point <- st_point(c(x_div, y_div))
+division_point_sf <- st_sfc(division_point, crs = 4326)
+
+sample_division_2 <- sample_intersections_2
+st_geometry(sample_division_2) <- st_sfc(division_point_sf)
+```
+
+```{r}
+tmap_mode('view')
+
+tm_shape(sample_osm) +
+  tm_lines() +
+tm_shape(sample_buffer) +
+  tm_lines(col = "black", alpha = 1) +
+tm_shape(sample_sign) +
+  tm_dots(size = 0.05, col = "red") +
+tm_shape(sample_intersections_1) +
+  tm_dots(size = 0.05, col = "blue") +
+tm_shape(sample_intersections_2) +
+  tm_dots(size = 0.05, col = "green") +
+tm_shape(sample_division_1) +
+  tm_dots(size = 0.05, col = "blue") +
+tm_shape(sample_division_2) +
+  tm_dots(size = 0.05, col = "green") 
+```
+
+```{r}
+getCoordinates <- function(x){
+  x <- x %>%
+    mutate(lon = st_coordinates(geometry)[, "X"],
+           lat = st_coordinates(geometry)[, "Y"]) 
+  return(x)
+}
+```
+
+```{r}
+sample_sign <- getCoordinates(sample_sign)
+sample_sign
+
+sample_division_1 <- getCoordinates(sample_division_1)
+sample_division_1
+
+sample_division_2 <- getCoordinates(sample_division_2)
+sample_division_2
+```
+
+```{r}
+getAzimuth <- function(sign, viewpoint){
+  azimuth <- atan2(sign %>% pull(lon) %>% as.numeric() - viewpoint %>% pull(lon) %>% as.numeric() ,
+                   sign %>% pull(lat) %>% as.numeric() - viewpoint %>% pull(lat) %>% as.numeric() )*180/pi
+  if (azimuth < 0){
+  azimuth <- azimuth + 360
+  #print(azimuth)
+  }
+  
+  viewpoint$azi <- azimuth
+  #print(viewpoint)
+  return(viewpoint)
+}
+```
+
+```{r}
+sample_division_1 <- getAzimuth(sample_sign, sample_division_1)
+sample_division_1
+
+sample_division_2 <- getAzimuth(sample_sign, sample_division_2)
+sample_division_2
+```
+
+```{r}
+key <- Sys.getenv("google_api_jaegleejamsil")
+```
+
+```{r}
+dir_here <- "/Users/jaeglee/ongoings/parking_sign/nyc/data/"
+```
+
+```{r}
+getImage <- function(iterrow){
+  location <- paste0(iterrow$lat %>% round(9), ",", iterrow$lon %>% round(9))
+  heading <- iterrow$azi %>% round(3)
+  highway <- iterrow$highway
+  signid <- iterrow$sign_unique_id
+  fov <- 45
+  
+  endpoint <- "https://maps.googleapis.com/maps/api/streetview"
+  
+  furl <- glue::glue("{endpoint}?size=640x640&location={location}&heading={heading}&fov={fov}&pitch=0&key={key}")
+  fname <- glue::glue("GSV-signid_{signid}-location_{location}-heading_{heading}-fov_{fov}.jpg") # Don't change this code for fname
+  fpath <- paste0(dir_here, "img_1/", fname)
+
+  if (!file.exists(fpath)){
+    download.file(furl, fpath, mode = 'wb') 
+  }
+}
+```
+
+```{r}
+sample_division_1 %>%
+  getImage()
+```
+
+```{r}
+sample_division_2 %>%
+  getImage()
+```
+
+```{r}
+#sample_sign %>%
+#  mutate(azi = (as.numeric(sample_division_1$azi) + as.numeric(sample_division_2$azi))/2)%>%
+#  getImage()
+```
+  
+## functionalize
+```{r}
+getIntersections <- function(buffer){
+  temp_osm <- nyc_osm_lines_only_filtered[buffer, ]
+  
+  if (nrow(temp_osm) > 0){
+    temp_osm <- temp_osm %>% slice(1)
+    
+    temp_intersections <- st_intersection(buffer, temp_osm) %>%
+      st_cast("POINT") %>%
+      relocate(osm_id, highway, sign_unique_id, SG_MUTCD_C_abb, SG_MUTCD_C, SIGNDESC1_abb)
+    
+    #print(temp_intersections)
+    return(temp_intersections)
+  } else{
+    temp_intersections <- temp_osm
+  }
+}
+
+getDivisions <- function(temp_intersections) {
+  if (nrow(temp_intersections) == 2){
+    temp_intersections_1 <- temp_intersections[1,]
+    temp_intersections_2 <- temp_intersections[2,]
+  
+    coords1 <- st_coordinates(temp_intersections_1)
+    coords2 <- st_coordinates(temp_intersections_2)
+      
+    m <- 1
+    n <- 2
+    x_div <- (m * coords2[1, "X"] + n * coords1[1, "X"]) / (m + n)
+    y_div <- (m * coords2[1, "Y"] + n * coords1[1, "Y"]) / (m + n)
+    division_point <- st_point(c(x_div, y_div))
+    division_point_sf <- st_sfc(division_point, crs = 4326)
+    temp_division_1 <- temp_intersections_1 
+    st_geometry(temp_division_1) <- st_sfc(division_point_sf)
+  
+    m <- 2
+    n <- 1
+    x_div <- (m * coords2[1, "X"] + n * coords1[1, "X"]) / (m + n)
+    y_div <- (m * coords2[1, "Y"] + n * coords1[1, "Y"]) / (m + n)
+    division_point <- st_point(c(x_div, y_div))
+    division_point_sf <- st_sfc(division_point, crs = 4326)
+    temp_division_2 <- temp_intersections_2
+    st_geometry(temp_division_2) <- st_sfc(division_point_sf)
+    
+    temp_divisions_tb <- temp_division_1 %>%
+      bind_rows(temp_division_2)
+  
+    return(temp_divisions_tb)
+    rm(temp_intersections_1, temp_intersections_2, temp_division_1, temp_division_2)  
+  }
+}
+
+getCoordinates <- function(x){
+  x <- x %>%
+    mutate(lon = st_coordinates(geometry)[, "X"],
+           lat = st_coordinates(geometry)[, "Y"]) 
+  return(x)
+}
+
+getAzimuth <- function(sign, viewpoint){
+  azimuth <- atan2(sign %>% pull(lon) %>% as.numeric() - viewpoint %>% pull(lon) %>% as.numeric() ,
+                   sign %>% pull(lat) %>% as.numeric() - viewpoint %>% pull(lat) %>% as.numeric() )*180/pi
+  if (azimuth < 0){
+  azimuth <- azimuth + 360
+  #print(azimuth)
+  }
+  
+  viewpoint$azi <- azimuth
+  #print(viewpoint)
+  return(viewpoint)
+}
+
+getImage <- function(iterrow){
+  location <- paste0(iterrow$lat %>% round(9), ",", iterrow$lon %>% round(9))
+  heading <- iterrow$azi %>% round(3)
+  highway <- iterrow$highway
+  signid <- iterrow$sign_unique_id
+  fov <- 40
+  
+  endpoint <- "https://maps.googleapis.com/maps/api/streetview"
+  
+  furl <- glue::glue("{endpoint}?size=640x640&location={location}&heading={heading}&fov={fov}&pitch=0&key={key}")
+  fname <- glue::glue("GSV-signid_{signid}-location_{location}-heading_{heading}-fov_{fov}.jpg") # Don't change this code for fname
+  fpath <- paste0(dir_here, "img_1/", fname)
+
+  if (!file.exists(fpath)){
+    download.file(furl, fpath, mode = 'wb') 
+  }
+}
+```
+
+## range
+```{r}
+nrow(data_nyc_sf_not_mutcd_sortedout_sampled)
+```
+
+```{r}
+batch1 <- 1:999
+batch2 <- 1000:1999
+batch3 <- 2000:2999
+batch4 <- 3000:3789
+```
+
+## for loop
+```{r}
+whichbatch <- batch2
+```
+
+```{r}
+# nrow(data_nyc_sf_not_mutcd_sortedout_sampled_slimed)
+for (i in 3500:3789) {
+  print(glue::glue("starting {i}th image: unique_id {as.character(data_nyc_sf_not_mutcd_sortedout_sampled$sign_unique_id[i])}"))
+
+  temp_sign <- data_nyc_sf_not_mutcd_sortedout_sampled %>% 
+    slice(i)
+    
+  temp_sign_buffer <- temp_sign %>% 
+    st_buffer(dist = 12) %>%
+    st_boundary()
+  
+  temp_intersections <- getIntersections(temp_sign_buffer)
+  
+  if (nrow(temp_intersections) == 2){
+    result_divisions_tb <- getDivisions(temp_intersections)
+    division_1 <- result_divisions_tb %>% slice(1)
+    division_2 <- result_divisions_tb %>% slice(2)
+  } else{
+    next
+  }
+
+  temp_sign <- getCoordinates(temp_sign)
+  division_1 <- getCoordinates(division_1)
+  division_2 <- getCoordinates(division_2) 
+  
+  division_1 <- getAzimuth(temp_sign, division_1)
+  division_2 <- getAzimuth(temp_sign, division_2)
+  
+  division_1 %>%
+    getImage()
+  division_2 %>%
+    getImage()
+}
+```
+
+```{r}
+# for verification
+#tmap_mode('view')
+
+#tm_shape(temp_sign) +
+#  tm_dots(size = 0.05, col = "black") +
+#tm_shape(temp_sign_buffer) +
+#  tm_lines(col = "black", alpha = 1) +
+#tm_shape(result_divisions_tb) +
+#  tm_dots(size = 0.05, col = "red") 
+```
+
+
+# Distribution of classes within the sample
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  mutate(count_abb = n()) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb) %>%
+  arrange(SG_MUTCD_C_abb, SG_MUTCD_C) %>%
+  distinct(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count)
+```
+
+```{r}
+data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  mutate(count_abb = n()) %>%
+  ungroup() %>%
+  group_by(SG_MUTCD_C) %>%
+  mutate(count = n()) %>%
+  ungroup() %>%
+  relocate(SG_MUTCD_C_abb, SG_MUTCD_C, count_abb, count, SIGNDESC1_abb) %>%
+  arrange(SG_MUTCD_C_abb, SG_MUTCD_C) %>%
+  distinct(SG_MUTCD_C_abb, count_abb)
+```
+
+
+# Change file names
+```{r}
+mapping_signid_MUTCD <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  st_drop_geometry() %>%
+  select(sign_unique_id, SG_MUTCD_C_abb) 
+mapping_signid_MUTCD
+```
+
+```{r}
+filenames <- list.files("img_1/")
+print(filenames[1:5])
+```
+
+```{r}
+for (name in filenames[1:5]){
+  name_split <- strsplit(name, "-")[[1]][2]
+  signid <- strsplit(name_split, "_")[[1]][2]
+
+  mutcd <- mapping_signid_MUTCD %>%
+  filter(sign_unique_id == signid) %>%
+  pull(SG_MUTCD_C_abb) %>%
+  as.character()
+  
+  print(glue::glue("signid:{signid} belongs to {mutcd}"))
+  
+  newname <- str_c(strsplit(name, "-")[[1]][2],
+                   "-",
+                   glue::glue("mutcd_{mutcd}"), 
+                   "-",
+                   strsplit(name, "-")[[1]][3],
+                   "-",
+                   strsplit(name, "-")[[1]][4],
+                   "-",
+                   strsplit(name, "-")[[1]][5],
+                   ".jpg")
+  print(newname)
+}
+```
+
+```{r}
+filenames_new <- vector()
+```
+
+```{r}
+for (name in filenames){
+  name_split <- strsplit(name, "-")[[1]][2]
+  signid <- strsplit(name_split, "_")[[1]][2]
+
+  mutcd <- mapping_signid_MUTCD %>%
+  filter(sign_unique_id == signid) %>%
+  pull(SG_MUTCD_C_abb) %>%
+  as.character()
+  
+  #print(glue::glue("signid:{signid} belongs to {mutcd}"))
+  
+  newname <- str_c(strsplit(name, "-")[[1]][2],
+                   "-",
+                   glue::glue("mutcd_{mutcd}"), 
+                   "-",
+                   strsplit(name, "-")[[1]][3],
+                   "-",
+                   strsplit(name, "-")[[1]][4],
+                   "-",
+                   strsplit(name, "-")[[1]][5],
+                   ".jpg")
+  #print(newname)
+  
+  filenames_new <- filenames_new %>%
+    c(newname)
+}
+```
+
+```{r}
+length(filenames)
+length(filenames_new)
+```
+
+```{r}
+setwd("/Users/jaeglee/ongoings/parking_sign/nyc/data/img_1")
+file.rename(filenames, filenames_new)
+```
+
+```{r}
+length(filenames)
+```
+
+# List of parking sign classes
+```{r}
+common_parksigns_after_sampling <- data_nyc_sf_not_mutcd_sortedout_sampled %>%
+  st_drop_geometry() %>%
+  select(SG_MUTCD_C_abb, SIGNDESC1_abb) %>%
+  group_by(SG_MUTCD_C_abb) %>%
+  summarise(SIGNDESC1_abb = first(SIGNDESC1_abb),
+            count_abb = n())
+common_parksigns_after_sampling
+```
+
+```{r}
+common_parksigns_after_sampling %>%
+  write_csv("assets/common_parksigns/common_parksigns_after_sampling_not_mutcd.csv")
+```
+
+
+
+
+
+
+
+
+

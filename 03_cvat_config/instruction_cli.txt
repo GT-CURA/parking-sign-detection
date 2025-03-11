@@ -1,0 +1,10 @@
+
+
+<to start by the detached option>
+cd cvat
+docker compose up -d 
+
+
+<to end the operation>
+docker-compose down
+

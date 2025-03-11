@@ -1,0 +1,459 @@
+---
+title: "Sampling & Downloading GSV Images"
+author: "Originally written by Bon Woo Koo & Subhro Guhathakurta; modified by Uijeong Hwang"
+date: '2024-10-28'
+output:
+  rmdformats::downcute:
+    downcute_theme: "chaos"
+---
+
+<style type="text/css">
+  body{
+  font-family: Arial;
+  }
+</style>
+
+# Intro
+
+The first thing we need to do to use GSV images for urban analytics is to sample points, prepare location data (i.e., coordinates and headings) and download the images. The literature uses various methods to sample points to download GSV images from. For example, some studies sampled four images per street segments while some others downloaded four images (i.e., panorama) every 20 meters. We will be downloading four images per street segment, but you will also learn how to do it in a different way at the end.
+
+**NOTE:** The method for sampling GSV images in this document is a simplified version.
+
+![](https://raw.githubusercontent.com/ujhwang/urban-analytics-2024/main/Lab/module_4/img/GSV_sampling.JPG)
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(osmdata)
+library(sfnetworks)
+library(units)
+library(sf)
+library(tidygraph)
+library(tmap)
+library(here)
+library(progress)
+library(nominatimlite)
+library(lwgeom)
+ttm()
+```
+
+# Select a study area.
+
+Let's find a small city that is suitable for the exercise. You can choose a city you like. I chose Chamblee.
+```{r, message=FALSE, warning=FALSE, results='hide'}
+atl_blocks <- st_read("./atl_blocks.geojson") %>%
+  st_transform(4326)
+```
+
+```{r}
+tmap_mode("plot")
+tm_shape(atl_blocks) + 
+  tm_polygons(col = 'blue', alpha = 0.5, lwd = 1.5) 
+```
+```{r}
+#atl_blocks %>%
+#  pull(NAME)
+```
+
+```{r}
+atl_towns <- atl_blocks %>%
+  filter(NAME %in% c("Downtown", "Midtown"))
+#atl_downtown <- atl_blocks %>%
+#  filter(NAME %in% c("Downtown"))
+#atl_midtown <- atl_blocks %>%
+#  filter(NAME %in% c("Midtown"))
+rm(atl_blocks)
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(atl_towns) + 
+  tm_polygons(col = 'NAME', alpha = 0.5, lwd = 1.5) 
+```
+
+```{r}
+#atl_towns %>%
+#  st_write("./assets/osm/atl_towns.geojson")
+```
+
+# Get OSM data and clean it.
+## Download OSM.
+Download OSM data, convert it to an sfnetwork object, and clean it.
+```{r}
+# Bounding Box for the city you chose.
+my_bb <- atl_towns %>%
+  st_bbox()
+my_bb
+```
+
+```{r}
+# Get OSM data.
+osm_road <- opq(bbox = my_bb) %>%
+  add_osm_feature(key = "highway", 
+                  value = c("motorway", "trunk", "primary", 
+                            "secondary", "tertiary", "unclassified",
+                            "residential",
+                            "oneway")) %>%
+  osmdata_sf() %>% 
+  osm_poly2line()
+osm_road
+```
+
+```{r}
+# Breakdown of highway types
+round(prop.table(table(osm_road$osm_lines$highway)) * 100, 1)
+```
+
+```{r}
+osm_road$osm_lines %>% 
+  select(osm_id, highway, oneway) %>%
+  count(oneway) 
+```
+
+```{r}
+# Convert the OSM line to sfnetwork and clean it.
+net <- osm_road$osm_lines %>% 
+  select(osm_id, highway, oneway) %>% 
+  sfnetworks::as_sfnetwork(directed = FALSE) %>% 
+  activate("edges") %>%
+  filter(!edge_is_multiple()) %>% # remove duplicated edges
+  filter(!edge_is_loop()) %>% # remove loops
+  convert(., sfnetworks::to_spatial_subdivision) %>% # subdivide edges
+  convert(., sfnetworks::to_spatial_smooth) # delete pseudo nodes
+```
+
+## Filter relevant network
+Clean the  network, add length column. Then delete segments that are too short (< 100m). Finally, add a unique ID for each edge.
+```{r}
+net <- net %>% 
+  # Activate 'edges'
+  activate("edges") %>% 
+  # Add length column
+  mutate(length = st_length(.) %>% unclass()) %>% 
+  # Drop segments that are too short (100m)
+  filter(length > 30) %>% 
+  # Select only the following roadtypes
+  filter(highway %in% c("secondary", "tertiary", "residential"))
+net
+```
+
+```{r}
+saveRDS(net, "./assets/osm/atl_towns_net.rds")
+```
+
+## Extract edges.
+```{r}
+net <- readRDS(net, "./assets/osm/atl_towns_net.rds")
+```
+
+- Always extract edges first, so that the nodes you select afterhand are only the ones that are relevant to the selected edges.
+```{r}
+edges <- net %>% 
+  # Extract 'edges'
+  st_as_sf("edges") %>% 
+  # Drop redundant columns 
+  select(osm_id, highway, oneway) 
+print(nrow(edges))
+edges <- edges[atl_towns, ]
+print(nrow(edges))
+edges
+```
+
+```{r}
+edges <- edges %>%
+  filter(lengths(st_intersects(., atl_towns %>% st_boundary())) == 0) %>%
+  rename(road_type = highway)
+edges
+```
+
+## Extract nodes
+```{r}
+nodes <- net %>% 
+  # Extract 'nodes'
+  st_as_sf("nodes") %>% 
+  # Drop redundant columns 
+  st_buffer(dist = 20)
+print(nrow(nodes))
+nodes <- nodes[atl_towns, ]
+print(nrow(nodes))
+nodes
+```
+
+```{r}
+nodes <- nodes %>%
+  select(-`.tidygraph_node_index`) %>%
+  mutate(intersect_with_edges = lengths(st_intersects(nodes, edges))) %>%
+  filter(intersect_with_edges > 0) 
+nodes
+```
+
+## Export 
+```{r}
+edges %>%
+  st_write("./assets/osm/atl_towns_edges.geojson")
+```
+
+```{r}
+nodes %>%
+  st_write("./assets/osm/atl_towns_nodes.geojson")
+```
+
+# Split
+## Import
+```{r}
+atl_towns <- st_read("./assets/osm/atl_towns.geojson")
+```
+
+```{r}
+nodes <- st_read("./assets/osm/atl_towns_nodes.geojson")
+```
+
+```{r}
+edges <- st_read("./assets/osm/atl_towns_edges.geojson") %>%
+  mutate(length = as.numeric(st_length(.)))
+```
+
+```{r}
+tmap_mode("plot")
+tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges) +
+  tm_lines(col = "road_type", palette = "Set1") +
+tm_shape(nodes) +
+  tm_polygons(col = "white")
+```
+
+```{r fig.width = 7, fig.height = 5}
+edges %>%
+  st_drop_geometry() %>%
+  ggplot(aes(x = length, fill = road_type)) + 
+  geom_histogram()
+```
+
+## Splitting
+```{r}
+summary(edges$length)
+```
+
+```{r}
+edges_short_than_100 <- edges %>%
+  filter(length <= 100)
+```
+
+```{r}
+edges_long_than_100 <- edges %>%
+  filter(length > 100)
+```
+
+```{r fig.width = 10, fig.height = 5}
+tmap_mode("plot")
+m1 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges_short_than_100) +
+  tm_lines(col = "road_type",
+           palette = "Set1") +
+tm_shape(nodes) +
+  tm_dots(col = "white")
+
+m2 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges_long_than_100) +
+  tm_lines(col = "road_type",
+           palette = "Set1") +
+tm_shape(nodes) +
+  tm_polygons(col = "white")
+
+tmap_arrange(m1, m2)
+```
+
+### st_split on only the longer edges
+```{r}
+nodes_trimmed <- nodes %>%
+  mutate(intersect_with_edges = lengths(st_intersects(nodes, edges_long_than_100_split))) %>%
+  filter(intersect_with_edges > 0) 
+nodes_trimmed
+```
+
+```{r}
+edges_long_than_100_split <- st_split(edges_long_than_100, nodes_trimmed) %>%  # st_split
+  st_collection_extract("LINESTRING") %>%
+  mutate(length_segmented = as.numeric(st_length(.)))
+edges_long_than_100_split
+```
+
+```{r fig.width = 18, fig.height = 5}
+g1 <- edges_long_than_100_split %>%
+  st_drop_geometry() %>%
+  ggplot(aes(x = length, fill = road_type)) + 
+  geom_histogram()
+g2 <- edges_long_than_100_split %>%
+  st_drop_geometry() %>%
+  ggplot(aes(x = length_segmented, fill = road_type)) + 
+  geom_histogram()
+g3 <- edges_long_than_100_split %>%
+  st_drop_geometry() %>%
+  filter(length_segmented > 25 & length_segmented < 150) %>%
+  ggplot(aes(x = length_segmented, fill = road_type)) + 
+  geom_histogram()
+ggpubr::ggarrange(g1, g2, g3, nrow=1)
+```
+
+```{r}
+edges_long_than_100_split_trimmed <- edges_long_than_100_split %>%
+  filter(length_segmented > 25 & length_segmented < 150) 
+edges_long_than_100_split_trimmed
+```
+
+```{r fig.width = 10, fig.height = 10}
+tmap_mode("plot")
+m1 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges) +
+  tm_lines(col = "road_type",
+           palette = "Set1") 
+#+
+#tm_shape(nodes) +
+#  tm_dots(col = "white")
+
+m2 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges_short_than_100) +
+  tm_lines(col = "road_type",
+           palette = "Set1") 
+#+
+#tm_shape(nodes) +
+#  tm_dots(col = "white")
+
+m3 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges_long_than_100_split) +
+  tm_lines(col = "road_type",
+           palette = "Set1") 
+#+
+#tm_shape(nodes_trimmed) +
+#  tm_dots(col = "white")
+
+m4 <- tm_shape(atl_towns) +
+  tm_polygons() +
+tm_shape(edges_long_than_100_split_trimmed) +
+  tm_lines(col = "road_type",
+           palette = "Set1") 
+#+
+#tm_shape(nodes_trimmed) +
+#  tm_dots(col = "white")
+
+tmap_arrange(m1, m2, m3, m4)
+```
+
+### integrate
+```{r}
+edges_long_than_100_split_trimmed <- edges_long_than_100_split_trimmed %>%
+  mutate(length = length_segmented) %>%
+  select(-length_segmented)
+edges_long_than_100_split_trimmed
+```
+
+```{r}
+edges_segmented <- edges_short_than_100 %>%
+  bind_rows(edges_long_than_100_split_trimmed)
+edges_segmented
+```
+
+```{r}
+edges_segmented <- edges_segmented %>%
+  arrange(as.integer(osm_id)) %>%
+  mutate(osm_id = as.character(osm_id)) %>%
+  mutate(edge_id = as.character(seq(1, nrow(.)))) %>%
+  relocate(osm_id, edge_id, road_type, length, oneway) %>%
+  select(osm_id, edge_id, road_type, length, oneway) 
+edges_segmented
+```
+
+```{r}
+rownames(edges_segmented) <- seq_len(nrow(edges_segmented))
+edges_segmented
+```
+
+## Export
+```{r}
+edges_segmented %>%
+  st_write("./assets/osm/atl_towns_edges_segmented.geojson")
+```
+
+## Not doing sampling
+```{r}
+edges_segmented <- st_read("./assets/osm/atl_towns_edges_segmented.geojson")
+edges_segmented
+```
+
+```{r}
+edges_segmented %>%
+  count(road_type)
+```
+
+```{r}
+edges_segmented %>%
+  ggplot(aes(x = length, fill = "road_type")) +
+  geom_histogram()
+```
+
+```{r}
+nodes_trimmed <- nodes_trimmed %>%
+  filter(lengths(st_intersects(., edges_segmented)) > 0)
+nodes_trimmed
+```
+
+```{r}
+tmap_mode("view")
+tm_shape(atl_towns) +
+  tm_polygons(col = "grey20", alpha = 0.4) +
+tm_shape(edges_segmented) +
+  tm_lines(col = "road_type", lwd = 2, palette = "Set1", popup.vars = c("length")) +
+tm_shape(nodes) +
+  tm_dots(col = "white")
+```
+
+```{r fig.width = 10, fig.height = 5}
+g1 <- edges %>%
+  st_drop_geometry() %>%
+  ggplot(aes(x = length, fill = road_type)) + 
+  geom_histogram()
+g2 <- edges_segmented %>%
+  st_drop_geometry() %>%
+  ggplot(aes(x = length, fill = road_type)) + 
+  geom_histogram()
+ggpubr::ggarrange(g1, g2)
+```
+
+```{r}
+edges_segmented <- edges_segmented %>%
+  relocate(edge_id, osm_id, road_type, oneway, length) 
+edges_segmented
+```
+
+```{r}
+edges_segmented %>%
+  count(osm_id)
+```
+
+```{r}
+edges_segmented %>%
+  st_write("./assets/osm/atl_towns_edges_535.geojson")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

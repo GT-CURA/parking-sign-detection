@@ -1,0 +1,192 @@
+[
+  {
+    "name": "empty-so-disregard",
+    "type": "tag",
+    "attributes": []
+  },
+  {
+    "name": "R7-1",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-20",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-21",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-22",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-24",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-27",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-28",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-30",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-31",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-32",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-34",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-40",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-41",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-42",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-43",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-44",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-45",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-49",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-50",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-51",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-55",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-56",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-57",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-59",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-61",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-65",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-66",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-68",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-69",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-70",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-88",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-100",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-101",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-110",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-125",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-128",
+    "type": "rectangle",
+    "attributes": []
+  },
+  {
+    "name": "R7-182",
+    "type": "rectangle",
+    "attributes": []
+  }
+]
