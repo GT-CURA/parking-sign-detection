@@ -13,8 +13,6 @@ Our demonstration involves:
 
 This project is part of the broader **"Complete Street" Index** research initiative at [the Center for Urban Resilience and Analytics](https://resilience.research.gatech.edu/) at **Georgia Tech**.
 
----
-
 ## **Methods**
 This repository includes the following key methods:
 
@@ -26,10 +24,9 @@ This repository includes the following key methods:
 
 3. **Inference on Atlanta GSV Images**  
    - Applying the trained model to detect parking signs in Atlanta.
-   ![](/.30_model_trained/model_nc_5_0209_l_30_nycatl/val_batch0_pred.jpg)
+   ![](output/val_batch0_pred.jpg)
 
 4. **Visualization**   
    - Geographical distribution of detected parking signs in Atlanta (n=167).  
-
-   ![Detected Parking Signs](./figure_readme.png)
+   ![](./output/figure_readme.png)
 ---
